@@ -14,11 +14,13 @@ import csv
 from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -128,3 +130,8 @@ async def subscribe(body: SubscribeRequest):
             datetime.now(timezone.utc).isoformat(),
         ])
     return {"subscribed": True}
+
+
+# Serve the browser client from the same process so local development needs only one server.
+frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
+app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")

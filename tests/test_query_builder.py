@@ -58,9 +58,9 @@ def test_exclude_keywords():
 def test_build_ats_queries_all():
     params = SearchParams(job_title="DevOps Engineer")
     queries = build_ats_queries(params)
-    assert len(queries) == 7
+    assert len(queries) == 20
     assert "greenhouse" in queries
-    assert 'site:boards.greenhouse.io "DevOps Engineer"' == queries["greenhouse"]
+    assert 'site:greenhouse.io "DevOps Engineer"' == queries["greenhouse"]
 
 
 def test_build_ats_queries_filtered():

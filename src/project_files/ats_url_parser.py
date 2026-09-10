@@ -53,7 +53,7 @@ _LEVER = re.compile(
 # Ashby:
 #   https://jobs.ashbyhq.com/{slug}/{uuid}
 _ASHBY = re.compile(
-    rf"^https?://jobs\.ashbyhq\.com/([^/?#]+)/({_UUID_RE})/?$",
+    rf"^https?://jobs\.ashby(?:hq)?\.com/([^/?#]+)/({_UUID_RE})/?$",
     re.IGNORECASE,
 )
 

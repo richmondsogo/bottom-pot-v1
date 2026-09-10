@@ -24,6 +24,19 @@ def test_health_endpoint():
     assert data["version"] == "2.0.0"
 
 
+def test_frontend_assets_are_served():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Bottom Pot" in response.text
+
+    stylesheet = client.get("/styles.css")
+    script = client.get("/app.js")
+    assert stylesheet.status_code == 200
+    assert script.status_code == 200
+    assert "--green" in stylesheet.text
+    assert "streamSearch" in script.text
+
+
 def test_subscribe_endpoint(tmp_path):
     sub_file = str(tmp_path / "test_subs.csv")
     settings.subscriptions_file = sub_file
