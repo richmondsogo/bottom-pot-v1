@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
+from src.project_files.config import ATS_PLATFORMS
 from src.project_files.models import ATSConfig, SearchParams
 
 GOOGLE_BASE_URL = "https://www.google.com/search"
@@ -9,15 +10,7 @@ GOOGLE_BASE_URL = "https://www.google.com/search"
 # ---------------------------------------------------------------------------
 # ATS Domain Registry for Step 7 API Query Building
 # ---------------------------------------------------------------------------
-ATS_DOMAINS: dict[str, str] = {
-    "greenhouse": "boards.greenhouse.io",
-    "lever": "jobs.lever.co",
-    "ashby": "jobs.ashbyhq.com",
-    "smartrecruiters": "jobs.smartrecruiters.com",
-    "workable": "apply.workable.com",
-    "bamboohr": "bamboohr.com/careers",
-    "recruitee": "recruitee.com",
-}
+ATS_DOMAINS: dict[str, str] = {platform.name: platform.site_operator for platform in ATS_PLATFORMS}
 
 
 def build_ats_query(domain: str, params: SearchParams) -> str:

@@ -37,16 +37,48 @@ def _make_id(provider: str, company_slug: str, job_id: str) -> str:
 
 
 def _normalize_employment(raw: str | None) -> str | None:
-    """Map freeform ATS strings to the canonical set."""
+    """Map freeform ATS strings to the canonical job type set."""
     if not raw:
         return None
     low = raw.lower().replace(" ", "_").replace("-", "_")
+    if "intern" in low:
+        return "internship"
     if "full" in low:
         return "full_time"
     if "contract" in low or "contractor" in low:
         return "contract"
     if "part" in low:
         return "part_time"
+    return None
+
+
+def _normalize_work_model(raw: str | None, is_remote: bool | None = None) -> str | None:
+    """Map provider wording to remote, hybrid, or in_person."""
+    if is_remote is True:
+        return "remote"
+    if is_remote is False:
+        return "in_person"
+    if not raw:
+        return None
+    low = raw.lower().replace("-", " ").replace("_", " ")
+    if "hybrid" in low:
+        return "hybrid"
+    if "remote" in low or "work from home" in low:
+        return "remote"
+    if "onsite" in low or "on site" in low or "in person" in low or "office" in low:
+        return "in_person"
+    return None
+
+
+def _first_name(value: object) -> str | None:
+    """Read a name from common ATS object/list response shapes."""
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("label") or value.get("title")
+        return name.strip() if isinstance(name, str) and name.strip() else None
+    if isinstance(value, list) and value:
+        return _first_name(value[0])
     return None
 
 
@@ -114,10 +146,11 @@ class GreenhouseClient:
             location = (data.get("location") or {}).get("name")
             apply_url = data.get("absolute_url") or parsed.raw_url
             company = data.get("company_name") or parsed.company_slug
+            work_model = _normalize_work_model(location)
 
             # updated_at is ISO8601 e.g. "2024-01-15T09:00:00.000Z"
             posted_at: datetime | None = None
-            raw_date = data.get("updated_at")
+            raw_date = data.get("first_published") or data.get("created_at") or data.get("updated_at")
             if raw_date:
                 try:
                     posted_at = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
@@ -132,6 +165,10 @@ class GreenhouseClient:
                 company=company,
                 company_slug=parsed.company_slug,
                 location=location,
+                is_remote=work_model == "remote" if work_model else None,
+                employment_type=_normalize_employment(data.get("employment_type") or data.get("employmentType")),
+                work_model=work_model,
+                department=_first_name(data.get("departments") or data.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
@@ -184,6 +221,7 @@ class LeverClient:
             title = data.get("text", "")
             location = categories.get("location")
             commitment = categories.get("commitment")  # e.g. "Full-time"
+            work_model = _normalize_work_model(location)
             apply_url = data.get("applyUrl") or parsed.raw_url
 
             # createdAt is Unix milliseconds
@@ -203,7 +241,10 @@ class LeverClient:
                 company=parsed.company_slug,
                 company_slug=parsed.company_slug,
                 location=location,
+                is_remote=work_model == "remote" if work_model else None,
                 employment_type=_normalize_employment(commitment),
+                work_model=work_model,
+                department=_first_name(categories.get("team") or categories.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
@@ -256,6 +297,7 @@ class AshbyClient:
             location = data.get("locationName")
             apply_url = data.get("jobUrl") or parsed.raw_url
             employment_raw = data.get("employmentType")  # e.g. "FullTime"
+            work_model = _normalize_work_model(data.get("workplaceType") or data.get("workplaceTypeName") or location)
 
             posted_at: datetime | None = None
             raw_date = data.get("publishedAt")
@@ -276,7 +318,10 @@ class AshbyClient:
                 company=company,
                 company_slug=parsed.company_slug,
                 location=location,
+                is_remote=work_model == "remote" if work_model else None,
                 employment_type=_normalize_employment(employment_raw),
+                work_model=work_model,
+                department=data.get("departmentName") or _first_name(data.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
@@ -332,6 +377,7 @@ class SmartRecruitersClient:
             loc_data = data.get("location") or {}
             location = loc_data.get("city")
             is_remote = loc_data.get("remote")  # bool or None
+            work_model = _normalize_work_model(loc_data.get("remoteType") or location, is_remote if isinstance(is_remote, bool) else None)
             apply_url = data.get("ref") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -351,6 +397,9 @@ class SmartRecruitersClient:
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,
+                employment_type=_normalize_employment(data.get("typeOfEmployment")),
+                work_model=work_model,
+                department=_first_name(data.get("function") or data.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
@@ -403,6 +452,7 @@ class WorkableClient:
             loc_data = data.get("location") or {}
             location = loc_data.get("location_str") or loc_data.get("city")
             is_remote = data.get("remote")
+            work_model = _normalize_work_model(data.get("workplace_type") or location, is_remote if isinstance(is_remote, bool) else None)
             apply_url = data.get("url") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -422,6 +472,9 @@ class WorkableClient:
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,
+                employment_type=_normalize_employment(data.get("employment_type") or data.get("employmentType")),
+                work_model=work_model,
+                department=_first_name(data.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
@@ -495,6 +548,7 @@ class BambooHRClient:
             apply_url = (
                 f"https://{parsed.company_slug}.bamboohr.com/careers/{parsed.job_id}"
             )
+            work_model = _normalize_work_model(matched.get("locationType") or location)
 
             return JobListing(
                 id=_make_id("bamboohr", parsed.company_slug, parsed.job_id),
@@ -504,6 +558,10 @@ class BambooHRClient:
                 company=parsed.company_slug,
                 company_slug=parsed.company_slug,
                 location=location,
+                is_remote=work_model == "remote" if work_model else None,
+                employment_type=_normalize_employment(matched.get("employmentStatus") or matched.get("employmentType")),
+                work_model=work_model,
+                department=_first_name(matched.get("department")),
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,
                 source_url=parsed.raw_url,
@@ -556,6 +614,7 @@ class RecruiteeClient:
             title = offer.get("title", "") or offer.get("position", "")
             location = offer.get("location") or offer.get("city")
             is_remote = offer.get("remote")
+            work_model = _normalize_work_model(offer.get("workplace_type") or location, is_remote if isinstance(is_remote, bool) else None)
             apply_url = offer.get("careers_url") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -575,6 +634,9 @@ class RecruiteeClient:
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,
+                employment_type=_normalize_employment(offer.get("employment_type") or offer.get("employmentType")),
+                work_model=work_model,
+                department=_first_name(offer.get("department")),
                 posted_at=posted_at,
                 scraped_at=datetime.now(timezone.utc),
                 apply_url=apply_url,

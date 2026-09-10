@@ -86,6 +86,8 @@ class JobListing(BaseModel):
     location: str | None = None
     is_remote: bool | None = None
     employment_type: str | None = None
+    work_model: str | None = None
+    department: str | None = None
     # "full_time" | "contract" | "part_time" | None
 
     # ── Dates ─────────────────────────────────────────────────────────

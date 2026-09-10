@@ -30,6 +30,8 @@ from src.project_files.models import (
     SearchParams,
 )
 from src.project_files.nigerian_scrapers import NIGERIAN_SCRAPERS, BaseScraper
+from src.project_files.config import SERPER_ENDPOINT
+from src.project_files.ats_page_enricher import enrich_ats_page
 from src.project_files.query_builder import ATS_DOMAINS, build_ats_queries
 
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ _cache: dict[str, CacheEntry] = {}
 
 
 def _cache_key(params: SearchParams) -> str:
-    payload = params.model_dump_json(exclude={"max_results"})
+    payload = "api-v3-broad-search:" + params.model_dump_json(exclude={"max_results"})
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
@@ -95,6 +97,29 @@ def _sort_by_posted_at(listings: list[JobListing]) -> list[JobListing]:
     return sorted(listings, key=sort_key, reverse=True)
 
 
+def _snippet_listing(
+    url: str,
+    title: str,
+    snippet: str,
+    provider: str,
+    query_used: str,
+) -> JobListing:
+    """Keep unsupported ATS results instead of discarding them during URL parsing."""
+    listing_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return JobListing(
+        id=f"{provider}:{listing_id}",
+        provider=provider,
+        data_source="snippet",
+        title=title or snippet or url,
+        company="Unknown",
+        scraped_at=datetime.now(timezone.utc),
+        apply_url=url,
+        source_url=url,
+        query_used=query_used,
+        ats_source=provider,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 10 — Search Orchestrator
 # ---------------------------------------------------------------------------
@@ -104,6 +129,41 @@ class SearchOrchestrator:
     Orchestrates concurrent searches across ATS platforms and Nigerian sites.
     Yields events: ("results", ResultsBatch), ("done", DoneEvent), ("error", ErrorEvent).
     """
+
+    async def _enrich_ats_item(
+        self,
+        platform: str,
+        item: dict,
+        query_str: str,
+        client: httpx.AsyncClient,
+    ) -> JobListing | None:
+        url = item.get("link", "")
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        if not url or not url.startswith("https"):
+            return None
+
+        parsed = parse_ats_url(url)
+        ats_client = ATS_CLIENTS.get(parsed.ats) if parsed else None
+        try:
+            if parsed and ats_client:
+                return await ats_client.fetch(
+                    parsed=parsed,
+                    client=client,
+                    fallback_snippet=title or snippet,
+                    query_used=query_str,
+                )
+            return await enrich_ats_page(
+                url=url,
+                provider=platform,
+                search_title=title,
+                snippet=snippet,
+                query_used=query_str,
+                client=client,
+            )
+        except Exception as exc:
+            logger.warning(f"[{platform}] Error enriching job from {url}: {exc}")
+            return _snippet_listing(url, title, snippet, platform, query_str)
 
     async def _search_ats_serper(
         self,
@@ -120,60 +180,42 @@ class SearchOrchestrator:
         listings: list[JobListing] = []
         serper_used = False
 
-        payload = {
-            "q": query_str,
-            "page": 1,
-            "num": 10,
-            "hl": "en",
-            "tbs": f"qdr:d{params.days_back}" if params.days_back and params.days_back > 0 else "qdr:d7",
-        }
-        if params.country_code:
-            payload["gl"] = params.country_code.strip().lower()
+        for page in range(1, settings.serper_max_pages + 1):
+                payload = {
+                    "q": query_str,
+                    "page": page,
+                    "num": 10,
+                    "hl": "en",
+                    "tbs": f"qdr:d{params.days_back}" if params.days_back and params.days_back > 0 else "qdr:d7",
+                }
+                if params.country_code:
+                    payload["gl"] = params.country_code.strip().lower()
 
-        try:
-            serper_used = True
-            resp = await client.post(
-                "https://google.serper.dev/search",
-                json=payload,
-                headers={
-                    "X-API-KEY": settings.serper_api_key,
-                    "Content-Type": "application/json",
-                },
-                timeout=settings.ats_request_timeout_seconds + 5.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            logger.warning(f"[{platform}] Serper search failed: {exc}")
-            return (platform, listings, serper_used)
+                try:
+                    serper_used = True
+                    resp = await client.post(
+                        SERPER_ENDPOINT,
+                        json=payload,
+                        headers={
+                            "X-API-KEY": settings.serper_api_key,
+                            "Content-Type": "application/json",
+                        },
+                        timeout=settings.ats_request_timeout_seconds + 5.0,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as exc:
+                    logger.warning(f"[{platform}] Serper page {page} failed: {exc}")
+                    continue
 
-        organic = data.get("organic", [])
-        for item in organic:
-            url = item.get("link", "")
-            snippet = item.get("snippet", "")
-            if not url:
-                continue
-
-            parsed = parse_ats_url(url)
-            if not parsed:
-                # Silently discard non-job URLs
-                continue
-
-            ats_client = ATS_CLIENTS.get(parsed.ats)
-            if not ats_client:
-                continue
-
-            try:
-                job = await ats_client.fetch(
-                    parsed=parsed,
-                    client=client,
-                    fallback_snippet=snippet,
-                    query_used=query_str,
+                items = data.get("organic", [])
+                enriched = await asyncio.gather(
+                    *(self._enrich_ats_item(platform, item, query_str, client) for item in items),
+                    return_exceptions=True,
                 )
-                if job:
-                    listings.append(job)
-            except Exception as exc:
-                logger.warning(f"[{platform}] Error fetching job from {url}: {exc}")
+                for job in enriched:
+                    if isinstance(job, JobListing):
+                        listings.append(job)
 
         return (platform, listings, serper_used)
 
@@ -183,7 +225,7 @@ class SearchOrchestrator:
         params: SearchParams,
         client: httpx.AsyncClient,
     ) -> tuple[str, list[JobListing], bool]:
-        """Executes a single Nigerian scraper. Returns (site_name, listings, False)."""
+        """Execute one Nigerian scraper without failing the whole search."""
         try:
             listings = await scraper.search(client, params)
             return (scraper.site_name, listings, False)
@@ -196,6 +238,7 @@ class SearchOrchestrator:
         params: SearchParams,
         platforms: list[str] | None = None,
     ) -> AsyncGenerator[tuple[str, ResultsBatch | DoneEvent | ErrorEvent], None]:
+
         start_time = time.monotonic()
         cache_key = _cache_key(params)
         cached_entry = _cache_get(cache_key)

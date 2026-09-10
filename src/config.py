@@ -7,13 +7,14 @@ class Settings(BaseSettings):
     serper_api_key: str
 
     # Search behaviour
-    max_results: int = 30
-    max_serper_queries_per_search: int = 8
+    max_results: int = 100
+    max_serper_queries_per_search: int = 60
+    serper_max_pages: int = 3
 
     # Timeouts
     ats_request_timeout_seconds: int = 5
     scraper_request_timeout_seconds: int = 10
-    search_hard_timeout_seconds: int = 30
+    search_hard_timeout_seconds: int = 90
 
     # Nigerian scraper politeness
     scraper_delay_seconds: float = 1.5

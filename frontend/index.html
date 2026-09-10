@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Search direct ATS job postings with Bottom Pot.">
+    <title>Bottom Pot | ATS Job Search</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="Bottom Pot home">
+            <span class="brand-mark" aria-hidden="true">BP</span>
+            <span>Bottom Pot <small>ATS SEARCH</small></span>
+        </a>
+        <div class="status-chip"><span class="status-dot"></span> Live search infrastructure</div>
+    </header>
+
+    <main class="workspace">
+        <section class="intro">
+            <p class="eyebrow">Direct from the source</p>
+            <h1>Find the signal<br><em>behind the noise.</em></h1>
+            <p class="intro-copy">Search public applicant tracking systems and turn fresh job postings into a clean, useful shortlist.</p>
+        </section>
+
+        <section class="panel" aria-labelledby="search-heading">
+            <div class="panel-heading">
+                <div>
+                    <p class="eyebrow">Search parameters</p>
+                    <h2 id="search-heading">Build a targeted query</h2>
+                </div>
+                <span class="mono">GET /search</span>
+            </div>
+
+            <form id="queryForm">
+                <label class="field field-wide">
+                    <span>Role or keyword <b>*</b></span>
+                    <input id="keywords" name="keywords" type="text" required minlength="2" maxlength="100" placeholder="e.g. Backend Software Engineer" autocomplete="off">
+                </label>
+
+                <div class="field-grid">
+                    <label class="field">
+                        <span>Location</span>
+                        <input id="location" name="location" type="text" maxlength="100" placeholder="Anywhere">
+                    </label>
+                    <label class="field">
+                        <span>Work model</span>
+                        <select id="workModel" name="workModel">
+                            <option value="any">Any model</option>
+                            <option value="remote">Remote only</option>
+                            <option value="onsite">Exclude remote</option>
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>Posted within</span>
+                        <select id="postAge" name="postAge">
+                            <option value="3">3 days</option>
+                            <option value="7" selected>7 days</option>
+                            <option value="14">14 days</option>
+                            <option value="30">30 days</option>
+                            <option value="90">90 days</option>
+                        </select>
+                    </label>
+                </div>
+
+                <label class="check-field">
+                    <input id="includeNigerian" type="checkbox" checked>
+                    <span>Include Nigerian job boards</span>
+                </label>
+
+                <button class="primary-button" type="submit">
+                    <span>Search ATS platforms</span>
+                    <span aria-hidden="true">&#8599;</span>
+                </button>
+            </form>
+
+            <div id="processingScreen" class="state-screen hidden" aria-live="polite">
+                <div class="spinner" aria-hidden="true"></div>
+                <div>
+                    <p class="state-title">Compiling live results...</p>
+                    <p id="liveConsole" class="console-line">Connecting to the search pipeline...</p>
+                </div>
+                <button id="cancelBtn" class="text-button" type="button">Cancel search</button>
+            </div>
+
+            <div id="deliveryScreen" class="hidden" aria-live="polite">
+                <div class="result-toolbar">
+                    <div>
+                        <p class="eyebrow">Search complete</p>
+                        <h2 id="resultTitle">Results are ready</h2>
+                        <p id="extractionSummary" class="muted"></p>
+                    </div>
+                    <div class="toolbar-actions">
+                        <button id="downloadBtn" class="secondary-button" type="button">Download CSV</button>
+                        <button id="resetBtn" class="text-button" type="button">New search</button>
+                    </div>
+                </div>
+                <div id="metrics" class="metrics"></div>
+                <div class="table-controls" aria-label="Filter results">
+                    <label class="filter-field filter-search">
+                        <span>Filter results</span>
+                        <input id="tableSearch" type="search" placeholder="Role, company, location..." autocomplete="off">
+                    </label>
+                    <label class="filter-field">
+                        <span>Provider</span>
+                        <select id="providerFilter"><option value="">All providers</option></select>
+                    </label>
+                    <label class="filter-field">
+                        <span>Work model</span>
+                        <select id="remoteFilter">
+                            <option value="">Any model</option>
+                            <option value="remote">Remote</option>
+                            <option value="onsite">On-site / unspecified</option>
+                        </select>
+                    </label>
+                    <label class="filter-field">
+                        <span>Job type</span>
+                        <select id="employmentFilter"><option value="">All types</option></select>
+                    </label>
+                    <button id="clearFiltersBtn" class="text-button" type="button">Clear filters</button>
+                </div>
+                <p id="filterSummary" class="filter-summary" aria-live="polite"></p>
+                <div class="results-wrap">
+                    <table>
+                        <thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Job type</th><th>Work model</th><th>Posted date</th><th>Source</th><th></th></tr></thead>
+                        <tbody id="resultsBody"></tbody>
+                    </table>
+                    <p id="emptyState" class="empty-state hidden">No matching postings were returned. Try a broader role or date range.</p>
+                </div>
+            </div>
+
+            <div id="errorScreen" class="error-screen hidden" role="alert">
+                <strong>Search could not be completed.</strong>
+                <p id="errorMessage"></p>
+                <button id="errorResetBtn" class="text-button" type="button">Return to search</button>
+            </div>
+        </section>
+    </main>
+
+    <footer><span>Bottom Pot</span> &middot; Direct ATS discovery, without the feed.</footer>
+    <script src="/app.js" defer></script>
+</body>
+</html>
