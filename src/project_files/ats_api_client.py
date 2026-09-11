@@ -13,6 +13,7 @@ Return values:
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -27,7 +28,9 @@ from src.project_files.field_normalizer import (
     normalize_fields,
     normalize_job_type,
     normalize_work_model,
+    parse_datetime,
 )
+from src.project_files.http_headers import browser_headers
 from src.project_files.models import JobListing
 from src.project_files.retry import with_retry
 
@@ -95,7 +98,7 @@ class GreenhouseClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -173,7 +176,7 @@ class LeverClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -250,7 +253,7 @@ class AshbyClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -326,7 +329,7 @@ class SmartRecruitersClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -405,7 +408,7 @@ class WorkableClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -416,56 +419,54 @@ class WorkableClient:
         fallback_snippet: str | None = None,
         query_used: str = "",
     ) -> JobListing | None:
-        url = f"https://{parsed.company_slug}.workable.com/j/{parsed.job_id}.json"
+        url = f"https://apply.workable.com/{parsed.company_slug}/jobs/view/{parsed.job_id}.md"
         try:
-            data = await self._do_fetch(url, client)
+            response = await client.get(
+                url,
+                headers=browser_headers(url, "text/markdown,text/plain;q=0.9,*/*;q=0.8"),
+                timeout=_TIMEOUT,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+            markdown = response.text
+            lines = [line.strip() for line in markdown.splitlines() if line.strip()]
+            title = lines[0].removeprefix("# ").strip() if lines else ""
+            summary = next((line[2:].strip() for line in lines if line.startswith("> ")), "")
+            summary_parts = [part.strip() for part in summary.split("·")]
+            company = summary_parts[0] if summary_parts else humanize_slug(parsed.company_slug) or "Unknown"
+            location = summary_parts[1] if len(summary_parts) > 1 else None
+            employment = summary_parts[2] if len(summary_parts) > 2 else None
+            posted_match = re.search(r"Posted\s+(.+)$", summary, re.IGNORECASE)
+            posted_at = parse_datetime(posted_match.group(1)) if posted_match else None
+            workplace_match = re.search(r"\*\*Workplace:\*\*\s*(.+)", markdown, re.IGNORECASE)
+            department_match = re.search(r"\*\*Department:\*\*\s*(.+)", markdown, re.IGNORECASE)
+            work_model = _normalize_work_model(workplace_match.group(1) if workplace_match else location)
+            return JobListing(
+                id=_make_id("workable", parsed.company_slug, parsed.job_id),
+                provider="workable",
+                data_source="scrape",
+                title=title or fallback_snippet or parsed.raw_url,
+                company=company,
+                company_slug=parsed.company_slug,
+                location=location,
+                is_remote=work_model == "remote" if work_model else None,
+                employment_type=_normalize_employment(employment),
+                work_model=work_model,
+                department=department_match.group(1).strip() if department_match else None,
+                posted_at=posted_at,
+                scraped_at=datetime.now(timezone.utc),
+                apply_url=parsed.raw_url,
+                source_url=parsed.raw_url,
+                query_used=query_used,
+                ats_source="workable",
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return None
             logger.warning(f"[workable] API error {exc.response.status_code} for {url}")
             return _fallback(parsed, fallback_snippet, query_used)
         except Exception as exc:
-            logger.warning(f"[workable] Unexpected error for {url}: {exc}")
-            return _fallback(parsed, fallback_snippet, query_used)
-
-        try:
-            title = data.get("title", "")
-            loc_data = data.get("location") or {}
-            location = loc_data.get("location_str") or loc_data.get("city")
-            is_remote = data.get("remote")
-            work_model = _normalize_work_model(data.get("workplace_type") or location, is_remote if isinstance(is_remote, bool) else None)
-            company = _first_name(data.get("company") or data.get("company_name") or data.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
-            apply_url = data.get("url") or parsed.raw_url
-
-            posted_at: datetime | None = None
-            raw_date = data.get("created_at")
-            if raw_date:
-                try:
-                    posted_at = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-
-            return JobListing(
-                id=_make_id("workable", parsed.company_slug, parsed.job_id),
-                provider="workable",
-                data_source="api",
-                title=title,
-                company=company,
-                company_slug=parsed.company_slug,
-                location=location,
-                is_remote=is_remote if isinstance(is_remote, bool) else None,
-                employment_type=_normalize_employment(data.get("employment_type") or data.get("employmentType")),
-                work_model=work_model,
-                department=_first_name(data.get("department")),
-                posted_at=posted_at,
-                scraped_at=datetime.now(timezone.utc),
-                apply_url=apply_url,
-                source_url=parsed.raw_url,
-                query_used=query_used,
-                ats_source="workable",
-            )
-        except Exception as exc:
-            logger.warning(f"[workable] Parse error for {url}: {exc}")
+            logger.warning(f"[workable] Markdown fetch failed for {url}: {exc}")
             return _fallback(parsed, fallback_snippet, query_used)
 
 
@@ -481,7 +482,7 @@ class BambooHRClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -568,7 +569,7 @@ class RecruiteeClient:
 
     @with_retry(max_attempts=3, base_delay=1.0)
     async def _do_fetch(self, url: str, client: httpx.AsyncClient) -> dict:
-        resp = await client.get(url, timeout=_TIMEOUT)
+        resp = await client.get(url, headers=browser_headers(url, "application/json,text/plain;q=0.9,*/*;q=0.8"), timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 

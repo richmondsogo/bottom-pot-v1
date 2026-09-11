@@ -232,6 +232,7 @@ class TestAdditionalATS:
             ("https://jobs.icims.com/jobs/12345/backend-engineer", "icims"),
             ("https://apply.breezy.hr/p/abc123/backend-engineer", "breezy"),
             ("https://applytojob.com/apply/abc123", "jazzhr"),
+            ("https://activeprospect.applytojob.com/app/share/kmnC9eIyPq", "jazzhr"),
             ("https://jobs.sap.com/job/12345/backend-engineer", "successfactors"),
         ],
     )
@@ -251,3 +252,16 @@ class TestAdditionalATS:
     )
     def test_additional_homepages_and_malformed_urls_are_rejected(self, url):
         assert parse_ats_url(url) is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://jobs.smartrecruiters.com/NBCUniversal3/744000148820824-sr-software-engineer",
+            "https://jobs.smartrecruiters.com/Canva/6000000001393822-staff-software-engineer-video-performance-bay-area-only-",
+        ],
+    )
+    def test_smartrecruiters_title_slug_is_supported(self, url):
+        parsed = parse_ats_url(url)
+        assert parsed is not None
+        assert parsed.ats == "smartrecruiters"
+        assert parsed.job_id.isdigit()

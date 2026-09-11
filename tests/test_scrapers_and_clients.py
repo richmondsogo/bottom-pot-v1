@@ -147,6 +147,12 @@ async def test_generic_ats_page_handles_graph_and_array_json_ld():
     assert job.posted_at is not None
 
 
+def test_human_readable_date_is_parsed():
+    from src.project_files.field_normalizer import parse_datetime
+
+    assert parse_datetime("Sep 9, 2026").date().isoformat() == "2026-09-09"
+
+
 @pytest.mark.anyio
 async def test_generic_ats_page_without_metadata_is_honest_snippet_fallback():
     def mock_handler(request: httpx.Request):
@@ -182,6 +188,32 @@ async def test_api_client_humanizes_company_slug_when_provider_omits_name():
     assert job is not None
     assert job.company == "Acme Corp 2024"
     assert job.company != parsed.company_slug
+
+
+@pytest.mark.anyio
+async def test_workable_markdown_extracts_structured_fields():
+    parsed = parse_ats_url("https://apply.workable.com/treq/j/D94DBAF102")
+    assert parsed is not None
+    markdown = """# Software Engineer
+> TreQ · Milton, United Kingdom · Full-time · Posted 2026-09-08
+**Workplace:** on_site
+**Department:** Engineering
+"""
+
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(200, text=markdown)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as client:
+        job = await WorkableClient().fetch(parsed, client)
+
+    assert job is not None
+    assert job.data_source == "scrape"
+    assert job.company == "TreQ"
+    assert job.location == "Milton, United Kingdom"
+    assert job.employment_type == "full_time"
+    assert job.work_model == "in_person"
+    assert job.department == "Engineering"
+    assert job.posted_at is not None
 
 
 @pytest.mark.anyio

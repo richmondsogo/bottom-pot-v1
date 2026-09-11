@@ -12,6 +12,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from src.project_files.models import JobListing
+from src.project_files.http_headers import browser_headers
 from src.project_files.field_normalizer import (
     clean_title,
     extract_labeled_fields,
@@ -61,7 +62,7 @@ def _json_ld_documents(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 
 def _company_from_title(title: str) -> str | None:
-    match = re.search(r"\s+(?:at|@)\s+(.+?)(?:\s+[|·-]\s+|$)", title, re.IGNORECASE)
+    match = re.search(r"(?:\s+(?:at|@)|^Careers at\s+)(.+?)(?:\s+[|·-]\s+|$)", title, re.IGNORECASE)
     return match.group(1).strip(" .") if match else None
 
 
@@ -83,11 +84,13 @@ async def enrich_ats_page(
     posted_at = None
     department = None
     structured_source_found = False
+    resolved_apply_url = url
 
     try:
-        response = await client.get(url, timeout=10.0, follow_redirects=True)
+        response = await client.get(url, headers=browser_headers(url), timeout=10.0, follow_redirects=True)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
+        page_text = " ".join(soup.stripped_strings)
         document = next((item for item in _json_ld_documents(soup) if item.get("@type") == "JobPosting"), {})
         structured_source_found = bool(document)
         title = _text(document.get("title")) or _text(soup.find("meta", attrs={"property": "og:title"}).get("content") if soup.find("meta", attrs={"property": "og:title"}) else None) or title
@@ -102,6 +105,64 @@ async def enrich_ats_page(
             posted_at = parse_datetime(date_meta.get("content") if date_meta else None)
             structured_source_found = structured_source_found or posted_at is not None
         department = _text(document.get("occupationalCategory")) or _text(document.get("department"))
+
+        # SAP and other server-rendered career pages expose labeled token rows without JSON-LD.
+        page_fields = extract_labeled_fields(page_text)
+        if "jobs.sap.com" in url:
+            company = company if company != "Unknown" else "SAP"
+            for token in soup.select(".joblayouttoken"):
+                label_node = token.select_one(".joblayouttoken-label")
+                if not label_node:
+                    continue
+                label = label_node.get_text(" ", strip=True).lower().rstrip(":")
+                value = token.get_text(" ", strip=True)
+                value = re.sub(rf"^{re.escape(label)}\s*:\s*", "", value, flags=re.IGNORECASE).strip()
+                if label == "location":
+                    page_fields["location"] = value
+                elif label == "employment type":
+                    page_fields["employment_type"] = value
+                elif label == "posted date":
+                    posted_at = parse_datetime(value)
+                elif label in {"work area", "department"}:
+                    page_fields["department"] = value
+            if "office attendance" in page_text.lower():
+                page_fields["work_model"] = "in_person"
+        location = location or page_fields.get("location")
+        job_type = job_type or normalize_job_type(page_fields.get("employment_type"))
+        work_model = work_model or normalize_work_model(page_fields.get("work_model") or location)
+        department = department or page_fields.get("department")
+        structured_source_found = structured_source_found or bool(location or job_type or work_model or department)
+
+        if "taleo.net" in url:
+            for panel in soup.select(".contentlinepanel"):
+                label = panel.select_one("h2, .subtitle")
+                value = panel.select_one(".text")
+                if not label or not value:
+                    continue
+                label_text = label.get_text(" ", strip=True).lower()
+                value_text = value.get_text(" ", strip=True)
+                if "location" in label_text and not location:
+                    location = value_text
+                elif "organization" in label_text and company == "Unknown":
+                    company = value_text
+            structured_source_found = structured_source_found or bool(location)
+
+        if "applytojob.com/app/share" in url:
+            title_node = soup.select_one(".focus-subheader h1, .focus-subheader-content h1, h1")
+            title = title_node.get_text(" ", strip=True) if title_node else title
+            share_link = soup.select_one("a[href*='/apply/']")
+            if share_link and share_link.get("href"):
+                resolved_apply_url = share_link.get("href")
+            if title.lower().startswith("share job"):
+                summary = soup.select_one(".focus-subheader-content-info, .focus-subheader")
+                summary_text = summary.get_text(" ", strip=True) if summary else ""
+                match = re.search(r"Share Job\s+(.+?)\s+(?:Remote|Hybrid|Full Time|Part Time|Contract|Internship)\b", summary_text, re.IGNORECASE)
+                if match:
+                    title = match.group(1).strip()
+            attributes = [node.get_text(" ", strip=True) for node in soup.select("#focus-subheader-content-info li, .focus-subheader-content-info li")]
+            job_type = job_type or normalize_job_type(next((item for item in attributes if normalize_job_type(item)), None))
+            work_model = work_model or normalize_work_model(" ".join(attributes))
+            structured_source_found = structured_source_found or bool(title_node or attributes)
     except (httpx.HTTPError, ValueError):
         pass
 
@@ -120,7 +181,7 @@ async def enrich_ats_page(
         provider=provider,
         data_source="scrape" if has_structured_data else "snippet",
         title=fields["title"] or clean_title(title, snippet),
-        company=company,
+        company=company or "Unknown",
         location=fields["location"],
         is_remote=fields["is_remote"],
         employment_type=fields["employment_type"],
@@ -128,7 +189,7 @@ async def enrich_ats_page(
         department=fields["department"],
         posted_at=posted_at,
         scraped_at=datetime.now(timezone.utc),
-        apply_url=url,
+        apply_url=resolved_apply_url,
         source_url=url,
         query_used=query_used,
         ats_source=provider,

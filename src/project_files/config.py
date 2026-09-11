@@ -16,7 +16,6 @@ ATS_PLATFORMS = [
     ATSConfig(name="workable", site_operator="apply.workable.com", label="Workable"),
     ATSConfig(name="bamboohr", site_operator="bamboohr.com/careers", label="BambooHR"),
     ATSConfig(name="jobvite", site_operator="jobs.jobvite.com", label="Jobvite"),
-    ATSConfig(name="notion", site_operator="notion.site", label="Notion"),
     ATSConfig(
         name="smartrecruiters",
         site_operator="jobs.smartrecruiters.com",

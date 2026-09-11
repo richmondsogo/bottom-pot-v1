@@ -61,7 +61,7 @@ _ASHBY = re.compile(
 #   https://jobs.smartrecruiters.com/{CompanyName}/{job_id}
 #   job_id is a long numeric string (not UUID)
 _SMARTREC = re.compile(
-    r"^https?://jobs\.smartrecruiters\.com/([^/?#]+)/(\d+)/?$",
+    r"^https?://jobs\.smartrecruiters\.com/([^/?#]+)/(\d+)(?:-[^/?#]+)?/?$",
     re.IGNORECASE,
 )
 
@@ -99,6 +99,7 @@ _PERSONIO = re.compile(r"^https?://jobs\.personio\.(?:com|de)/job/([^/?#]+?)(?:-
 _ICIMS = re.compile(r"^https?://jobs\.icims\.com/jobs/(\d+)/[^/?#]+/?$", re.IGNORECASE)
 _BREEZY = re.compile(r"^https?://apply\.breezy\.hr/p/([^/?#]+)/[^/?#]+/?$", re.IGNORECASE)
 _JAZZHR = re.compile(r"^https?://applytojob\.com/apply/([^/?#]+)/?$", re.IGNORECASE)
+_JAZZHR_SHARE = re.compile(r"^https?://([^./?#]+)\.applytojob\.com/app/share/([^/?#]+)/?$", re.IGNORECASE)
 _JOBADDER = re.compile(r"^https?://apply\.jobadder\.com/[^/?#]+/[^/?#]+/([^/?#]+)/?$", re.IGNORECASE)
 _TALEO = re.compile(r"^https?://[^/?#]+\.taleo\.net/careersection/[^/?#]+/jobdetail\.ftl\?job=(\d+).*$", re.IGNORECASE)
 _AVATURE = re.compile(r"^https?://[^/?#]+\.avature\.net/[^/?#]+/job/(\d+)/[^/?#]+/?$", re.IGNORECASE)
@@ -192,6 +193,10 @@ def parse_ats_url(url: str) -> ParsedATSUrl | None:
         m = _JAZZHR.match(clean_url)
         if m:
             return ParsedATSUrl(ats="jazzhr", company_slug="jazzhr", job_id=m.group(1), raw_url=url)
+
+        m = _JAZZHR_SHARE.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="jazzhr", company_slug=m.group(1), job_id=m.group(2), raw_url=url)
 
         m = _JOBADDER.match(clean_url)
         if m:
