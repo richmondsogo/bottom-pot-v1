@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -18,6 +20,7 @@ from src.project_files.field_normalizer import (
     extract_labeled_fields,
     normalize_fields,
     normalize_job_type,
+    normalize_job_type_from_text,
     normalize_work_model,
     parse_datetime,
 )
@@ -66,6 +69,43 @@ def _company_from_title(title: str) -> str | None:
     return match.group(1).strip(" .") if match else None
 
 
+def _clean_html_text(value: Any) -> str | None:
+    """Decode HTML entities and strip tags from a description body."""
+    if value is None:
+        return None
+    cleaned = html.unescape(str(value))
+    if "<" in cleaned:
+        try:
+            cleaned = BeautifulSoup(cleaned, "lxml").get_text(" ", strip=True)
+        except Exception:
+            cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip() or None
+
+
+def _meta_content(soup: BeautifulSoup, attr: str, name: str) -> str | None:
+    node = soup.find("meta", attrs={attr: name})
+    if node is None:
+        return None
+    content = node.get("content")
+    return content.strip() if isinstance(content, str) and content.strip() else None
+
+
+def _jazzhr_share_attributes(soup: BeautifulSoup) -> dict[str, str | None]:
+    """Read the labelled attribute rows JazzHR renders on its share pages."""
+    result: dict[str, str | None] = {"location": None, "job_type": None, "experience": None}
+    for node in soup.select("#focus-subheader-content-info li, .focus-subheader-content-info li"):
+        text = node.get_text(" ", strip=True)
+        icon = node.select_one("i, span.fa, .fa")
+        icon_classes = " ".join(icon.get("class", [])) if icon else ""
+        if "map-marker" in icon_classes:
+            result["location"] = text or None
+        elif "clock" in icon_classes:
+            result["job_type"] = text or None
+        elif "graduation" in icon_classes:
+            result["experience"] = text or None
+    return result
+
+
 async def enrich_ats_page(
     url: str,
     provider: str,
@@ -85,6 +125,8 @@ async def enrich_ats_page(
     department = None
     structured_source_found = False
     resolved_apply_url = url
+    description: str | None = None
+    page_fields: dict[str, str] = {}
 
     try:
         response = await client.get(url, headers=browser_headers(url), timeout=10.0, follow_redirects=True)
@@ -93,12 +135,19 @@ async def enrich_ats_page(
         page_text = " ".join(soup.stripped_strings)
         document = next((item for item in _json_ld_documents(soup) if item.get("@type") == "JobPosting"), {})
         structured_source_found = bool(document)
-        title = _text(document.get("title")) or _text(soup.find("meta", attrs={"property": "og:title"}).get("content") if soup.find("meta", attrs={"property": "og:title"}) else None) or title
+        title = _text(document.get("title")) or _meta_content(soup, "property", "og:title") or title
         organization = document.get("hiringOrganization")
         company = _text(organization) or _company_from_title(title) or company
         location = _text(document.get("jobLocation")) or location
         job_type = normalize_job_type(_text(document.get("employmentType"))) or normalize_job_type(job_type)
-        work_model = normalize_work_model(_text(document.get("jobLocationType")) or location or work_model)
+        description = _clean_html_text(_text(document.get("description"))) or description
+        work_model = normalize_work_model(
+            _text(document.get("jobLocationType")),
+            location=location,
+            title=title,
+            description=description,
+            snippet=snippet,
+        ) or work_model
         posted_at = parse_datetime(document.get("datePosted"))
         if posted_at is None:
             date_meta = soup.find("meta", attrs={"property": "datePosted"}) or soup.find("meta", attrs={"name": "datePosted"})
@@ -106,8 +155,9 @@ async def enrich_ats_page(
             structured_source_found = structured_source_found or posted_at is not None
         department = _text(document.get("occupationalCategory")) or _text(document.get("department"))
 
-        # SAP and other server-rendered career pages expose labeled token rows without JSON-LD.
-        page_fields = extract_labeled_fields(page_text)
+        # SAP SuccessFactors career pages expose labeled token rows plus a full
+        # description; the work model is carried by a dedicated label or lives
+        # in the title/description text (e.g. "#LI-Hybrid", "hybrid role").
         if "jobs.sap.com" in url:
             company = company if company != "Unknown" else "SAP"
             for token in soup.select(".joblayouttoken"):
@@ -117,52 +167,152 @@ async def enrich_ats_page(
                 label = label_node.get_text(" ", strip=True).lower().rstrip(":")
                 value = token.get_text(" ", strip=True)
                 value = re.sub(rf"^{re.escape(label)}\s*:\s*", "", value, flags=re.IGNORECASE).strip()
+                if not value:
+                    continue
                 if label == "location":
                     page_fields["location"] = value
                 elif label == "employment type":
                     page_fields["employment_type"] = value
                 elif label == "posted date":
                     posted_at = parse_datetime(value)
+                elif label == "office attendance":
+                    page_fields["work_model"] = value
                 elif label in {"work area", "department"}:
                     page_fields["department"] = value
-            if "office attendance" in page_text.lower():
-                page_fields["work_model"] = "in_person"
+            sap_description = soup.select_one('[data-careersite-propertyid="description"], [itemprop="description"]')
+            if sap_description:
+                description = sap_description.get_text(" ", strip=True)
+        else:
+            page_fields.update(extract_labeled_fields(page_text))
+
         location = location or page_fields.get("location")
         job_type = job_type or normalize_job_type(page_fields.get("employment_type"))
-        work_model = work_model or normalize_work_model(page_fields.get("work_model") or location)
+        work_model = work_model or normalize_work_model(
+            page_fields.get("work_model"),
+            location=location,
+            title=title,
+            description=description,
+            snippet=snippet,
+        )
         department = department or page_fields.get("department")
-        structured_source_found = structured_source_found or bool(location or job_type or work_model or department)
+        if job_type is None:
+            type_scan_text = " ".join(
+                part for part in (title, snippet, page_fields.get("employment_type", ""), description or "", location or "") if part
+            )
+            job_type = normalize_job_type_from_text(type_scan_text)
+        structured_source_found = structured_source_found or bool(location or job_type or work_model or department or posted_at)
 
         if "taleo.net" in url:
             for panel in soup.select(".contentlinepanel"):
-                label = panel.select_one("h2, .subtitle")
-                value = panel.select_one(".text")
-                if not label or not value:
+                label = panel.select_one("h2, .subtitle, .title")
+                if not label:
                     continue
                 label_text = label.get_text(" ", strip=True).lower()
-                value_text = value.get_text(" ", strip=True)
+                value = panel.select_one(".text")
+                value_text = value.get_text(" ", strip=True) if value else ""
+                if not value_text or value_text.lower() == label_text:
+                    continue
                 if "location" in label_text and not location:
                     location = value_text
                 elif "organization" in label_text and company == "Unknown":
                     company = value_text
-            structured_source_found = structured_source_found or bool(location)
+                elif ("job type" in label_text or "employment" in label_text) and not page_fields.get("employment_type"):
+                    page_fields["employment_type"] = value_text
+                elif "posting date" in label_text or "posted date" in label_text:
+                    posted_at = posted_at or parse_datetime(value_text)
+            if description is None and page_text:
+                description = page_text[:6000]
 
+        # Personio job pages render a Next.js app but embed a JSON blob exposing
+        # the office/location, schedule (employment type) and department.
+        if "jobs.personio.com" in url:
+            raw_html = response.text
+            office_match = re.search(r'"main_office"\s*:\s*"([^"]+)"', raw_html)
+            schedule_match = re.search(r'"schedule"\s*:\s*"([^"]+)"', raw_html)
+            employment_like = re.search(r'"employment_type"\s*:\s*"([^"]+)"', raw_html)
+            department_match = re.search(r'"department"\s*:\s*"([^"]+)"', raw_html)
+            subcompany_match = re.search(r'"subcompany"\s*:\s*"([^"]+)"', raw_html)
+            location = location or (office_match.group(1) if office_match else None)
+            if not page_fields.get("employment_type"):
+                matched_type = (employment_like or schedule_match)
+                if matched_type:
+                    page_fields["employment_type"] = matched_type.group(1)
+            department = department or (department_match.group(1) if department_match else None)
+            if company == "Unknown":
+                if subcompany_match:
+                    company = subcompany_match.group(1)
+                else:
+                    og_title = _meta_content(soup, "property", "og:title")
+                    if og_title:
+                        org_match = re.search(r"\s*\|\s*Jobs? at Work for\s+(.+)$", og_title, re.IGNORECASE)
+                        if org_match:
+                            company = org_match.group(1).strip()
+            job_type = job_type or normalize_job_type(page_fields.get("employment_type"))
+            work_model = work_model or normalize_work_model(
+                None,
+                location=location,
+                title=title,
+                description=description,
+                snippet=snippet,
+            )
+            structured_source_found = structured_source_found or bool(location or job_type or work_model or department)
+
+        # JazzHR: the /app/share/ page points at the real /apply/ page, which
+        # publishes a full JSON-LD JobPosting (company, location, employment
+        # type, posted date, work model).
         if "applytojob.com/app/share" in url:
-            title_node = soup.select_one(".focus-subheader h1, .focus-subheader-content h1, h1")
-            title = title_node.get_text(" ", strip=True) if title_node else title
+            title_node = soup.select_one(".focus-subheader-content h1 a, .focus-subheader h1, h1")
+            if title_node:
+                title = title_node.get_text(" ", strip=True) or title
             share_link = soup.select_one("a[href*='/apply/']")
             if share_link and share_link.get("href"):
-                resolved_apply_url = share_link.get("href")
-            if title.lower().startswith("share job"):
-                summary = soup.select_one(".focus-subheader-content-info, .focus-subheader")
-                summary_text = summary.get_text(" ", strip=True) if summary else ""
-                match = re.search(r"Share Job\s+(.+?)\s+(?:Remote|Hybrid|Full Time|Part Time|Contract|Internship)\b", summary_text, re.IGNORECASE)
-                if match:
-                    title = match.group(1).strip()
-            attributes = [node.get_text(" ", strip=True) for node in soup.select("#focus-subheader-content-info li, .focus-subheader-content-info li")]
-            job_type = job_type or normalize_job_type(next((item for item in attributes if normalize_job_type(item)), None))
-            work_model = work_model or normalize_work_model(" ".join(attributes))
-            structured_source_found = structured_source_found or bool(title_node or attributes)
+                resolved_apply_url = urljoin(url, share_link.get("href"))
+            share_attrs = _jazzhr_share_attributes(soup)
+            location = location or share_attrs.get("location")
+            job_type = job_type or normalize_job_type(share_attrs.get("job_type"))
+            work_model = work_model or normalize_work_model(
+                None,
+                location=location or share_attrs.get("location"),
+                title=title,
+            )
+            structured_source_found = structured_source_found or bool(title_node or any(share_attrs.values()))
+            if company == "Unknown":
+                og_title = _meta_content(soup, "property", "og:title")
+                if og_title:
+                    org_match = re.search(r"\s-\s(.+?)\s+-\s+Career\s+Page\s*$", og_title, re.IGNORECASE)
+                    if org_match:
+                        company = org_match.group(1).strip()
+            if resolved_apply_url and resolved_apply_url != url:
+                try:
+                    apply_response = await client.get(
+                        resolved_apply_url,
+                        headers=browser_headers(resolved_apply_url),
+                        timeout=12.0,
+                        follow_redirects=True,
+                    )
+                    apply_response.raise_for_status()
+                    apply_soup = BeautifulSoup(apply_response.text, "lxml")
+                    apply_doc = next((item for item in _json_ld_documents(apply_soup) if item.get("@type") == "JobPosting"), {})
+                    if apply_doc:
+                        structured_source_found = True
+                        description = _clean_html_text(_text(apply_doc.get("description"))) or description
+                        title = _text(apply_doc.get("title")) or title
+                        org = _text(apply_doc.get("hiringOrganization"))
+                        if org:
+                            company = org if company == "Unknown" else company
+                        apply_location = _text(apply_doc.get("jobLocation"))
+                        location = apply_location or location
+                        job_type = job_type or normalize_job_type(_text(apply_doc.get("employmentType")))
+                        posted_at = posted_at or parse_datetime(apply_doc.get("datePosted"))
+                        work_model = normalize_work_model(
+                            _text(apply_doc.get("jobLocationType")),
+                            location=location,
+                            title=title,
+                            description=description,
+                            snippet=snippet,
+                        ) or work_model
+                except (httpx.HTTPError, ValueError):
+                    pass
     except (httpx.HTTPError, ValueError):
         pass
 

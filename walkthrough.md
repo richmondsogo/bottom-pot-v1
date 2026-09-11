@@ -791,9 +791,20 @@ Reads useful text from the different shapes ATS pages use: a string, a dictionar
 
 Maps provider wording to the four table categories: `full_time`, `part_time`, `internship`, and `contract`.
 
-### `_normalize_work_model(value)`
+### `_normalize_work_model(value, is_remote=None, **kwargs)`
 
-Maps wording such as `TELECOMMUTE`, `remote`, `hybrid`, `on-site`, and `office` to `remote`, `hybrid`, or `in_person`.
+Thin wrapper around the canonical `normalize_work_model()` resolver in `field_normalizer.py`. All providers — both API clients and the generic page enricher — route through this single function so work-model detection behaves consistently.
+
+### Canonical work-model resolver (`field_normalizer.py`)
+
+The `normalize_work_model()` function implements a strict priority order:
+
+1. **Explicit structured indicator** — a boolean `is_remote` flag or a dedicated workplace-type field (e.g. Lever's `workplaceType`, JazzHR's `jobLocationType`) is mapped directly via `_map_structured_work_model()`, which recognizes values like `TELECOMMUTE`, `remote`, `hybrid`, `onsite`, `on site or remote`, `partially remote`, etc.
+2. **Keyword scan** — the available free text (title, location, snippet, description, full page text) is scanned with an expanded regex vocabulary covering remote phrases (`fully remote`, `remote-first`, `telecommute`, `work from home`, `télétravail`), hybrid phrases (`mix of remote and office`, `3 days in the office`, `hybridised`, `combination of home and on-site`), in-person phrases (`face to face`, `office-based`, `vor ort`), and more.
+3. **Default to `in_person`** — when a real physical location is present (a city/address that isn't itself remote-sounding) but no keyword matched at all. This captures the majority of on-site jobs that never explicitly say "in person" or "onsite".
+4. **`None`** — only when there is genuinely no structured field, no keyword signal, and no location.
+
+This resolver is covered by direct unit tests in `tests/test_field_normalizer.py` for all four input categories.
 
 ### `_date(value)`
 

@@ -243,3 +243,63 @@ async def test_nigerian_remote_state_comes_from_card_not_search_filter():
     assert results[0].work_model == "in_person"
     assert results[0].department == "Engineering"
     assert results[0].posted_at is not None
+
+
+@pytest.mark.anyio
+async def test_jazzhr_share_page_resolves_and_extracts_all_fields():
+    """JazzHR share page should resolve to the apply page and extract company,
+    location, employment_type, work_model, and posted_at from the JSON-LD."""
+    import pathlib
+
+    fixture_path = pathlib.Path(__file__).resolve().parent / "fixtures" / "jazzhr_apply.html"
+    if not fixture_path.exists():
+        pytest.skip("JazzHR apply fixture not available")
+
+    apply_html = fixture_path.read_text(encoding="utf-8", errors="replace")
+
+    # The share page HTML that contains a link to the apply page
+    share_html = """
+    <html><body>
+    <div class="focus-subheader-content">
+        <h1><a href="/apply/kmnC9eIyPq/Senior-Software-Engineer-Product">Senior Software Engineer (Product)</a></h1>
+    </div>
+    <ul id="focus-subheader-content-info">
+        <li><i class="fa fa-map-marker"></i> Austin, TX</li>
+        <li><i class="fa fa-clock-o"></i> Full-time</li>
+    </ul>
+    <a href="/apply/kmnC9eIyPq/Senior-Software-Engineer-Product">Apply</a>
+    </body></html>
+    """
+
+    call_count = 0
+
+    def mock_handler(request: httpx.Request):
+        nonlocal call_count
+        call_count += 1
+        url = str(request.url)
+        if "/app/share/" in url:
+            return httpx.Response(200, text=share_html)
+        elif "/apply/" in url:
+            return httpx.Response(200, text=apply_html)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        job = await enrich_ats_page(
+            url="https://activeprospect.applytojob.com/app/share/kmnC9eIyPq",
+            provider="jazzhr",
+            search_title="Senior Software Engineer (Product)",
+            snippet="",
+            query_used="test",
+            client=client,
+        )
+
+    # Should have fetched both the share page and the apply page
+    assert call_count >= 2
+    assert job.company == "ActiveProspect, Inc."
+    assert "Austin" in (job.location or "")
+    assert "TX" in (job.location or "")
+    assert job.employment_type == "full_time"
+    assert job.work_model == "remote"
+    assert job.posted_at is not None
+    assert job.posted_at.date().isoformat() == "2026-09-03"
