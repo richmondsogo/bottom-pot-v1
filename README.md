@@ -65,7 +65,7 @@ source venv/bin/activate   # venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
 
-Get a free API key at [serper.dev](https://serper.dev) (2,500 free credits — each paginated request costs 1 credit, so a full run across all 20 platforms at 3 pages each costs ~60 credits, or roughly 41 full runs on the free tier). Then create a `.env` file in the project root:
+Get a free API key at [serper.dev](https://serper.dev) (2,500 free credits — each paginated request costs 1 credit, so a full run across all 19 platforms at 3 pages each costs up to 57 credits). Then create a `.env` file in the project root:
 
 ```
 SERPER_API_KEY=your_key_here
@@ -81,7 +81,7 @@ Start the FastAPI server from the project root:
 uvicorn src.api.main:app --reload
 ```
 
-Then open <http://127.0.0.1:8000/>. The UI sends the selected role, location, work model, freshness window, and Nigerian-board preference to `GET /search`. The browser pipeline now matches the CLI search budget: all 20 configured ATS domains, up to 3 Serper pages per domain, and a default cap of 100 results. Results arrive progressively over Server-Sent Events, and `Download CSV` creates a local CSV from the streamed records. No search data is uploaded to a third-party spreadsheet service.
+Then open <http://127.0.0.1:8000/>. The UI sends the selected role, location, work model, freshness window, and Nigerian-board preference to `GET /search`. The browser pipeline now matches the CLI search budget: all 19 configured ATS domains, up to 3 Serper pages per domain, and a default cap of 100 results. Results arrive progressively over Server-Sent Events, and `Download CSV` or `Download JSON` creates a local export from the streamed records. No search data is uploaded to a third-party spreadsheet service.
 
 The API also remains available at:
 
@@ -158,11 +158,11 @@ Written to `outputs/json/<prefix>_results.json` (pretty-printed) and `outputs/cs
 
 ## Design notes
 
-- **Google dorking over per-platform scraping or official APIs.** Rather than writing a separate scraper (or integrating a separate API) for each ATS, every platform is queried the same way through one Google-search interface via Serper — one `QueryBuilder`/`SerperSearcher` pair handles all 20 platforms.
+- **Google dorking over per-platform scraping or official APIs.** Rather than writing a separate scraper (or integrating a separate API) for each ATS, every platform is queried the same way through one Google-search interface via Serper — one `QueryBuilder`/`SerperSearcher` pair handles all 19 platforms.
 - **Async HTTP client (`httpx.AsyncClient`).** Requests across platforms and pages are I/O-bound, so `asyncio` keeps the run fast without threading.
 - **Pydantic models throughout.** `SearchParams`, `ATSConfig`, and `RawSearchResults` validate input and output shape rather than passing raw dicts around.
 - **Page budget capped at 3 per platform (`SERPER_MAX_PAGES`).** Each page costs 1 Serper credit; this bounds cost predictably regardless of how many platforms or how broad the search is.
-- **Browser and CLI coverage.** The browser uses the same 20-platform registry and three-page budget as the CLI. Only seven providers currently have structured enrichment clients; unsupported-platform results are retained as snippet records instead of silently discarded.
+- **Browser and CLI coverage.** The browser uses the same 19-platform registry and three-page budget as the CLI. Only seven providers currently have structured enrichment clients; the other platforms use generic page metadata before falling back to honest snippet records.
 - **`--platforms` and mutually-exclusive `--remote`/`--no-remote` flags.** Kept the CLI usable for narrow, cheap test runs instead of always hitting every platform.
 
 ## Known limitations

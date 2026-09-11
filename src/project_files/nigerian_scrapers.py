@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
+import re
 import urllib.parse
 from datetime import datetime, timezone
 from typing import List
@@ -18,6 +20,7 @@ from loguru import logger
 
 from src.config import settings
 from src.project_files.exceptions import BotBlockError, RateLimitError
+from src.project_files.field_normalizer import extract_labeled_fields, normalize_fields, parse_datetime
 from src.project_files.models import JobListing, SearchParams
 
 USER_AGENTS = [
@@ -38,6 +41,57 @@ def _check_bot_block(html: str, site: str) -> None:
     for kw in BOT_BLOCK_KEYWORDS:
         if kw in lower_html:
             raise BotBlockError(site)
+
+
+def _extract_card_metadata(card: BeautifulSoup) -> dict:
+    """Extract only metadata explicitly present in a Nigerian listing card."""
+    text = card.get_text(" ", strip=True)
+    labeled = extract_labeled_fields(text)
+    date_value = None
+    date_node = card.select_one("time[datetime], time, [data-posted], [data-date-posted]")
+    if date_node:
+        date_value = date_node.get("datetime") or date_node.get("data-posted") or date_node.get("data-date-posted") or date_node.get_text(" ", strip=True)
+    if not date_value:
+        date_match = re.search(r"(?:posted|published)\s*(?:on)?\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
+        date_value = date_match.group(1) if date_match else None
+
+    json_ld = None
+    for script in card.select('script[type="application/ld+json"]'):
+        try:
+            payload = json.loads(script.string or script.get_text())
+        except (TypeError, json.JSONDecodeError):
+            continue
+        values = payload if isinstance(payload, list) else [payload]
+        json_ld = next((item for item in values if isinstance(item, dict) and item.get("@type") == "JobPosting"), None)
+        if json_ld:
+            break
+
+    if json_ld:
+        labeled = {**labeled, **extract_labeled_fields(json.dumps(json_ld))}
+        if json_ld.get("employmentType"):
+            labeled["employment_type"] = json_ld["employmentType"]
+        if json_ld.get("jobLocationType"):
+            labeled["work_model"] = json_ld["jobLocationType"]
+        if json_ld.get("datePosted"):
+            date_value = json_ld["datePosted"]
+        if json_ld.get("department"):
+            labeled["department"] = json_ld["department"] if isinstance(json_ld["department"], str) else json_ld["department"].get("name")
+
+    fields = normalize_fields(
+        title=None,
+        snippet=text,
+        location=labeled.get("location"),
+        employment_type=labeled.get("employment_type"),
+        work_model=labeled.get("work_model") or text,
+        department=labeled.get("department"),
+    )
+    return {
+        "employment_type": fields["employment_type"],
+        "work_model": fields["work_model"],
+        "department": fields["department"],
+        "is_remote": fields["is_remote"],
+        "posted_at": parse_datetime(date_value),
+    }
 
 
 class BaseScraper:
@@ -125,6 +179,7 @@ class JobbermanScraper(BaseScraper):
 
                 loc_elem = card.select_one("span[class*='location'], span[class*='badge'], span.text-gray-500")
                 loc = loc_elem.get_text(strip=True) if loc_elem else params.location
+                metadata = _extract_card_metadata(card)
 
                 listing_id = _make_scraped_id(apply_url)
                 listings.append(
@@ -136,7 +191,11 @@ class JobbermanScraper(BaseScraper):
                         company=company,
                         company_slug=None,
                         location=loc,
-                        is_remote=params.remote,
+                        is_remote=metadata["is_remote"],
+                        employment_type=metadata["employment_type"],
+                        work_model=metadata["work_model"],
+                        department=metadata["department"],
+                        posted_at=metadata["posted_at"],
                         scraped_at=now,
                         apply_url=apply_url,
                         source_url=apply_url,
@@ -185,6 +244,7 @@ class MyJobMagScraper(BaseScraper):
 
                 loc_elem = item.select_one("li.job-details span[id*='location'], span.location")
                 loc = loc_elem.get_text(strip=True) if loc_elem else params.location
+                metadata = _extract_card_metadata(item)
 
                 listing_id = _make_scraped_id(apply_url)
                 listings.append(
@@ -196,7 +256,11 @@ class MyJobMagScraper(BaseScraper):
                         company=company,
                         company_slug=None,
                         location=loc,
-                        is_remote=params.remote,
+                        is_remote=metadata["is_remote"],
+                        employment_type=metadata["employment_type"],
+                        work_model=metadata["work_model"],
+                        department=metadata["department"],
+                        posted_at=metadata["posted_at"],
                         scraped_at=now,
                         apply_url=apply_url,
                         source_url=apply_url,
@@ -247,6 +311,7 @@ class NgCareersScraper(BaseScraper):
 
                 loc_elem = item.select_one(".location, span[class*='location']")
                 loc = loc_elem.get_text(strip=True) if loc_elem else params.location
+                metadata = _extract_card_metadata(item)
 
                 listing_id = _make_scraped_id(apply_url)
                 listings.append(
@@ -258,7 +323,11 @@ class NgCareersScraper(BaseScraper):
                         company=company,
                         company_slug=None,
                         location=loc,
-                        is_remote=params.remote,
+                        is_remote=metadata["is_remote"],
+                        employment_type=metadata["employment_type"],
+                        work_model=metadata["work_model"],
+                        department=metadata["department"],
+                        posted_at=metadata["posted_at"],
                         scraped_at=now,
                         apply_url=apply_url,
                         source_url=apply_url,
@@ -303,6 +372,7 @@ class HotNigerianJobsScraper(BaseScraper):
                 if not href or not title:
                     continue
                 apply_url = urllib.parse.urljoin(self.base_url, href)
+                metadata = _extract_card_metadata(item)
 
                 listing_id = _make_scraped_id(apply_url)
                 listings.append(
@@ -314,7 +384,11 @@ class HotNigerianJobsScraper(BaseScraper):
                         company="Various / HotNigerianJobs",
                         company_slug=None,
                         location=params.location,
-                        is_remote=params.remote,
+                        is_remote=metadata["is_remote"],
+                        employment_type=metadata["employment_type"],
+                        work_model=metadata["work_model"],
+                        department=metadata["department"],
+                        posted_at=metadata["posted_at"],
                         scraped_at=now,
                         apply_url=apply_url,
                         source_url=apply_url,

@@ -58,7 +58,7 @@ frontend/app.js                      SSE client, table rendering, filters, CSV e
 frontend/styles.css                  Browser layout and visual styling
 src/api/main.py                      FastAPI app, routes, SSE response, static mount
 src/config.py                        Environment-backed runtime settings
-src/project_files/config.py          20 ATS platform definitions and legacy Serper settings
+src/project_files/config.py          19 ATS platform definitions and legacy Serper settings
 src/project_files/models.py          Pydantic data contracts
 src/project_files/query_builder.py   Google/Serper query construction
 src/project_files/search_pipeline.py Concurrent browser search orchestration
@@ -77,7 +77,7 @@ Serper.dev is used as a **discovery layer**. It finds URLs that look like job pa
 
 Seven providers have dedicated API clients. The other configured ATS platforms are enriched by fetching the public job page and reading standard `JobPosting` JSON-LD or date metadata. If a page cannot be fetched or does not expose structured metadata, the system keeps a snippet-based record rather than dropping the result. One provider failing should not destroy the complete search.
 
-The browser search uses the same 20-platform registry and three Serper pages per platform as the CLI. That is up to 60 Serper requests for a broad search, capped at 100 returned jobs, with a 90-second hard timeout. Each page's job enrichment runs concurrently so the search is not unnecessarily slowed by one URL at a time.
+The browser search uses the same 19-platform registry and three Serper pages per platform as the CLI. That is up to 57 Serper requests for a broad search, capped at 100 returned jobs, with a 90-second hard timeout. Each page's job enrichment runs concurrently so the search is not unnecessarily slowed by one URL at a time.
 
 ## 3. Recommended Reading Order
 
@@ -274,7 +274,7 @@ The blank line after each event is part of the SSE protocol. The frontend reads 
 The default browser search can issue:
 
 ```text
-20 ATS platform queries x 3 Serper pages = up to 60 Serper requests
+19 ATS platform queries x 3 Serper pages = up to 57 Serper requests
 ```
 
 Each Serper page costs one credit. The search is capped at 100 normalized results and can run for up to 90 seconds. The Nigerian scrapers add direct website requests when their checkbox is enabled. A narrower search using a location, remote option, or specific CLI platforms costs less and usually finishes faster.
@@ -303,7 +303,7 @@ For a normal one-line command:
 python main.py --job-title "Product Designer" --platforms greenhouse,lever,ashby
 ```
 
-The CLI and browser use the same 20-platform registry, but the CLI uses the legacy `SerperSearcher` output path and writes raw Serper records. The browser uses `SearchOrchestrator`, enrichment, deduplication, caching, and SSE.
+The CLI and browser use the same 19-platform registry, but the CLI uses the legacy `SerperSearcher` output path and writes raw Serper records. The browser uses `SearchOrchestrator`, enrichment, deduplication, caching, and SSE.
 
 ### 4.5 Run tests
 
@@ -594,7 +594,7 @@ This returns a dictionary such as:
 }
 ```
 
-When `platforms` is omitted, it uses the 20 domains in `ATS_DOMAINS`, matching the CLI registry. When supplied, it filters to those names.
+When `platforms` is omitted, it uses the 19 domains in `ATS_DOMAINS`, matching the CLI registry. When supplied, it filters to those names.
 
 ### `QueryBuilder.__init__(ats)`
 
@@ -767,7 +767,7 @@ The function returns `None` for homepages, search pages, unrelated domains, inva
 
 ## 11. Generic ATS Page Enrichment
 
-The generic fallback extractor is [src/project_files/ats_page_enricher.py](src/project_files/ats_page_enricher.py). It exists because the configured list contains 20 ATS platforms but only some of them have a public JSON API client in this project.
+The generic fallback extractor is [src/project_files/ats_page_enricher.py](src/project_files/ats_page_enricher.py). It exists because the configured list contains 19 ATS platforms but only some of them have a public JSON API client in this project.
 
 Most modern job pages publish [Schema.org `JobPosting`](https://schema.org/JobPosting) JSON-LD. JSON-LD is a JSON object inside an HTML script tag. It commonly contains exactly the fields needed by the table:
 
@@ -819,7 +819,7 @@ Extracts common title patterns such as `Backend Engineer at Example Corp` when n
 
 This async function fetches an ATS job page, finds its `JobPosting` document, and maps provider-neutral fields into `JobListing`. It uses `datePosted` first, then a `datePosted` HTML meta tag. If the page is blocked, unavailable, or missing metadata, it returns the best available fallback instead of raising into the whole search.
 
-This is why the system can search all 20 configured domains without pretending that every provider has the same API. Structured API clients are preferred where available; standard page metadata is the second choice; snippets are the last choice.
+This is why the system can search all 19 configured domains without pretending that every provider has the same API. Structured API clients are preferred where available; standard page metadata is the second choice; snippets are the last choice.
 
 ## 12. ATS API Clients
 
@@ -1081,7 +1081,7 @@ The important sections are:
 - Header and brand identity.
 - Search form with role, location, work model, posting age, and Nigerian-board checkbox.
 - Processing screen with spinner and progress text.
-- Delivery screen with metrics, filter controls, result table, apply links, and CSV download.
+- Delivery screen with metrics, filter controls, result table, apply links, CSV export, and JSON export.
 - Error screen for failed requests.
 - Footer.
 
@@ -1121,6 +1121,10 @@ Builds a CSV from `currentResults`:
 9. Revoke the object URL.
 
 This download happens entirely in the browser. There is no CSV upload to a third-party service.
+
+### `downloadJson()`
+
+Uses the same `filteredResults()` source as CSV export, removes display-only fields such as `displayTitle`, and serializes the original backend `JobListing` fields with `JSON.stringify(..., null, 2)`. This keeps JSON aligned with the CLI JSON shape instead of creating a second frontend-only schema.
 
 ### `renderResults()`
 
@@ -1256,7 +1260,7 @@ These are not hidden; they are useful things to understand before extending the 
 
 ### One platform registry, two execution paths
 
-`src/project_files/config.py` contains the 20-platform registry used by both the CLI and FastAPI query builder. The CLI and browser still have different result pipelines, but they now begin with the same platform coverage. Seven providers have dedicated structured API clients; the other configured platforms use generic public page metadata when available.
+`src/project_files/config.py` contains the 19-platform registry used by both the CLI and FastAPI query builder. The CLI and browser still have different result pipelines, but they now begin with the same platform coverage. Seven providers have dedicated structured API clients; the other configured platforms use generic public page metadata when available.
 
 ### Search coverage must match the CLI budget
 

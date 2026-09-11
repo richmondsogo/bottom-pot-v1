@@ -155,7 +155,7 @@ class SearchOrchestrator:
                 )
             return await enrich_ats_page(
                 url=url,
-                provider=platform,
+                provider=parsed.ats if parsed else platform,
                 search_title=title,
                 snippet=snippet,
                 query_used=query_str,

@@ -22,6 +22,12 @@ from loguru import logger
 from src.config import settings
 from src.project_files.ats_url_parser import ParsedATSUrl
 from src.project_files.exceptions import ParseError, SearchProviderError
+from src.project_files.field_normalizer import (
+    humanize_slug,
+    normalize_fields,
+    normalize_job_type,
+    normalize_work_model,
+)
 from src.project_files.models import JobListing
 from src.project_files.retry import with_retry
 
@@ -37,37 +43,11 @@ def _make_id(provider: str, company_slug: str, job_id: str) -> str:
 
 
 def _normalize_employment(raw: str | None) -> str | None:
-    """Map freeform ATS strings to the canonical job type set."""
-    if not raw:
-        return None
-    low = raw.lower().replace(" ", "_").replace("-", "_")
-    if "intern" in low:
-        return "internship"
-    if "full" in low:
-        return "full_time"
-    if "contract" in low or "contractor" in low:
-        return "contract"
-    if "part" in low:
-        return "part_time"
-    return None
+    return normalize_job_type(raw)
 
 
 def _normalize_work_model(raw: str | None, is_remote: bool | None = None) -> str | None:
-    """Map provider wording to remote, hybrid, or in_person."""
-    if is_remote is True:
-        return "remote"
-    if is_remote is False:
-        return "in_person"
-    if not raw:
-        return None
-    low = raw.lower().replace("-", " ").replace("_", " ")
-    if "hybrid" in low:
-        return "hybrid"
-    if "remote" in low or "work from home" in low:
-        return "remote"
-    if "onsite" in low or "on site" in low or "in person" in low or "office" in low:
-        return "in_person"
-    return None
+    return normalize_work_model(raw, is_remote)
 
 
 def _first_name(value: object) -> str | None:
@@ -92,8 +72,8 @@ def _fallback(
         id=_make_id(parsed.ats, parsed.company_slug, parsed.job_id),
         provider=parsed.ats,
         data_source="snippet",
-        title=fallback_snippet or parsed.raw_url,
-        company=parsed.company_slug,
+        **normalize_fields(title=fallback_snippet, snippet=fallback_snippet),
+        company=humanize_slug(parsed.company_slug) or "Unknown",
         company_slug=parsed.company_slug,
         scraped_at=datetime.now(timezone.utc),
         apply_url=parsed.raw_url,
@@ -219,6 +199,7 @@ class LeverClient:
         try:
             categories = data.get("categories") or {}
             title = data.get("text", "")
+            company = _first_name(data.get("company") or data.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
             location = categories.get("location")
             commitment = categories.get("commitment")  # e.g. "Full-time"
             work_model = _normalize_work_model(location)
@@ -238,7 +219,7 @@ class LeverClient:
                 provider="lever",
                 data_source="api",
                 title=title,
-                company=parsed.company_slug,
+                company=company,
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=work_model == "remote" if work_model else None,
@@ -307,8 +288,7 @@ class AshbyClient:
                 except ValueError:
                     pass
 
-            # Ashby uses company slug from the URL
-            company = parsed.company_slug
+            company = _first_name(data.get("company") or data.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
 
             return JobListing(
                 id=_make_id("ashby", parsed.company_slug, parsed.job_id),
@@ -378,6 +358,7 @@ class SmartRecruitersClient:
             location = loc_data.get("city")
             is_remote = loc_data.get("remote")  # bool or None
             work_model = _normalize_work_model(loc_data.get("remoteType") or location, is_remote if isinstance(is_remote, bool) else None)
+            company = _first_name(data.get("company") or data.get("companyName") or data.get("organization")) or humanize_slug(parsed.company_slug) or "Unknown"
             apply_url = data.get("ref") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -393,7 +374,7 @@ class SmartRecruitersClient:
                 provider="smartrecruiters",
                 data_source="api",
                 title=title,
-                company=parsed.company_slug,
+                company=company,
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,
@@ -453,6 +434,7 @@ class WorkableClient:
             location = loc_data.get("location_str") or loc_data.get("city")
             is_remote = data.get("remote")
             work_model = _normalize_work_model(data.get("workplace_type") or location, is_remote if isinstance(is_remote, bool) else None)
+            company = _first_name(data.get("company") or data.get("company_name") or data.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
             apply_url = data.get("url") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -468,7 +450,7 @@ class WorkableClient:
                 provider="workable",
                 data_source="api",
                 title=title,
-                company=parsed.company_slug,
+                company=company,
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,
@@ -549,13 +531,14 @@ class BambooHRClient:
                 f"https://{parsed.company_slug}.bamboohr.com/careers/{parsed.job_id}"
             )
             work_model = _normalize_work_model(matched.get("locationType") or location)
+            company = _first_name(matched.get("company") or matched.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
 
             return JobListing(
                 id=_make_id("bamboohr", parsed.company_slug, parsed.job_id),
                 provider="bamboohr",
                 data_source="api",
                 title=title,
-                company=parsed.company_slug,
+                company=company,
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=work_model == "remote" if work_model else None,
@@ -615,6 +598,7 @@ class RecruiteeClient:
             location = offer.get("location") or offer.get("city")
             is_remote = offer.get("remote")
             work_model = _normalize_work_model(offer.get("workplace_type") or location, is_remote if isinstance(is_remote, bool) else None)
+            company = _first_name(offer.get("company") or offer.get("companyName")) or humanize_slug(parsed.company_slug) or "Unknown"
             apply_url = offer.get("careers_url") or parsed.raw_url
 
             posted_at: datetime | None = None
@@ -630,7 +614,7 @@ class RecruiteeClient:
                 provider="recruitee",
                 data_source="api",
                 title=title,
-                company=parsed.company_slug,
+                company=company,
                 company_slug=parsed.company_slug,
                 location=location,
                 is_remote=is_remote if isinstance(is_remote, bool) else None,

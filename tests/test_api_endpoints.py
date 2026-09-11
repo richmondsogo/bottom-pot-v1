@@ -35,6 +35,14 @@ def test_frontend_assets_are_served():
     assert script.status_code == 200
     assert "--green" in stylesheet.text
     assert "streamSearch" in script.text
+    assert "Download JSON" in response.text
+    assert "downloadJson" in script.text
+
+
+def test_exports_use_same_filtered_result_source():
+    script = client.get("/app.js").text
+    assert "const rows = filteredResults()" in script
+    assert "JSON.stringify(filteredResults()" in script
 
 
 def test_subscribe_endpoint(tmp_path):

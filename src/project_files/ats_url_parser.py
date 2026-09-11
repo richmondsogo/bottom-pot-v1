@@ -93,6 +93,18 @@ _RECRUITEE = re.compile(
     re.IGNORECASE,
 )
 
+_JOBVITE = re.compile(r"^https?://jobs\.jobvite\.com/([^/?#]+)/job/([^/?#]+)/?$", re.IGNORECASE)
+_TEAMTAILOR = re.compile(r"^https?://([^./?#]+)\.teamtailor\.com/jobs/(\d+)-[^/?#]+/?$", re.IGNORECASE)
+_PERSONIO = re.compile(r"^https?://jobs\.personio\.(?:com|de)/job/([^/?#]+?)(?:-(\d+))?/?$", re.IGNORECASE)
+_ICIMS = re.compile(r"^https?://jobs\.icims\.com/jobs/(\d+)/[^/?#]+/?$", re.IGNORECASE)
+_BREEZY = re.compile(r"^https?://apply\.breezy\.hr/p/([^/?#]+)/[^/?#]+/?$", re.IGNORECASE)
+_JAZZHR = re.compile(r"^https?://applytojob\.com/apply/([^/?#]+)/?$", re.IGNORECASE)
+_JOBADDER = re.compile(r"^https?://apply\.jobadder\.com/[^/?#]+/[^/?#]+/([^/?#]+)/?$", re.IGNORECASE)
+_TALEO = re.compile(r"^https?://[^/?#]+\.taleo\.net/careersection/[^/?#]+/jobdetail\.ftl\?job=(\d+).*$", re.IGNORECASE)
+_AVATURE = re.compile(r"^https?://[^/?#]+\.avature\.net/[^/?#]+/job/(\d+)/[^/?#]+/?$", re.IGNORECASE)
+_WORKDAY = re.compile(r"^https?://[^/?#]+\.myworkdayjobs\.com/[^?#]+/job/[^/?#]+/([^/?#]+)/?$", re.IGNORECASE)
+_SUCCESSFACTORS = re.compile(r"^https?://jobs\.sap\.com/job/([^/?#]+)/[^/?#]+/?$", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -156,6 +168,50 @@ def parse_ats_url(url: str) -> ParsedATSUrl | None:
         m = _RECRUITEE.match(clean_url)
         if m:
             return ParsedATSUrl(ats="recruitee", company_slug=m.group(1), job_id=m.group(2), raw_url=url)
+
+        m = _JOBVITE.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="jobvite", company_slug=m.group(1), job_id=m.group(2), raw_url=url)
+
+        m = _TEAMTAILOR.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="teamtailor", company_slug=m.group(1), job_id=m.group(2), raw_url=url)
+
+        m = _PERSONIO.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="personio", company_slug="personio", job_id=m.group(2) or m.group(1), raw_url=url)
+
+        m = _ICIMS.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="icims", company_slug="icims", job_id=m.group(1), raw_url=url)
+
+        m = _BREEZY.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="breezy", company_slug="breezy", job_id=m.group(1), raw_url=url)
+
+        m = _JAZZHR.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="jazzhr", company_slug="jazzhr", job_id=m.group(1), raw_url=url)
+
+        m = _JOBADDER.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="jobadder", company_slug="jobadder", job_id=m.group(1), raw_url=url)
+
+        m = _TALEO.match(url)
+        if m:
+            return ParsedATSUrl(ats="taleo", company_slug=parsed.netloc, job_id=m.group(1), raw_url=url)
+
+        m = _AVATURE.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="avature", company_slug=m.group(1), job_id=m.group(2), raw_url=url)
+
+        m = _WORKDAY.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="workday", company_slug=parsed.netloc, job_id=m.group(1), raw_url=url)
+
+        m = _SUCCESSFACTORS.match(clean_url)
+        if m:
+            return ParsedATSUrl(ats="successfactors", company_slug="sap", job_id=m.group(1), raw_url=url)
 
     except Exception:
         # Malformed URL — return None silently

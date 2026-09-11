@@ -16,6 +16,7 @@ from src.project_files.ats_api_client import (
 )
 from src.project_files.ats_url_parser import parse_ats_url
 from src.project_files.ats_page_enricher import enrich_ats_page
+from src.project_files.ats_api_client import LeverClient
 from src.project_files.nigerian_scrapers import (
     JobbermanScraper,
     MyJobMagScraper,
@@ -115,3 +116,98 @@ async def test_generic_ats_page_extracts_job_posting_metadata():
     assert job.department == "Engineering"
     assert job.posted_at is not None
     assert job.posted_at.date().isoformat() == "2026-09-01"
+
+
+@pytest.mark.anyio
+async def test_generic_ats_page_handles_graph_and_array_json_ld():
+    html = """
+    <script type="application/ld+json">[
+      {"@graph":[{"@type":"JobPosting","title":"Platform Engineer",
+       "datePosted":"2026-09-02","employmentType":"CONTRACT",
+       "hiringOrganization":{"name":"Graph Corp"},
+       "jobLocation":{"address":{"addressLocality":"London"}}} ]}
+    ]</script>
+    """
+
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(200, text=html)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as client:
+        job = await enrich_ats_page(
+            "https://jobs.example.com/platform",
+            "example_ats",
+            "Platform Engineer",
+            "",
+            "test",
+            client,
+        )
+
+    assert job.company == "Graph Corp"
+    assert job.employment_type == "contract"
+    assert job.posted_at is not None
+
+
+@pytest.mark.anyio
+async def test_generic_ats_page_without_metadata_is_honest_snippet_fallback():
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(200, text="<html><body>JavaScript application shell</body></html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as client:
+        job = await enrich_ats_page(
+            "https://jobs.example.com/unknown",
+            "example_ats",
+            "Backend Engineer",
+            "A posting without structured metadata",
+            "test",
+            client,
+        )
+
+    assert job.data_source == "snippet"
+    assert job.company == "Unknown"
+    assert job.location is None
+    assert job.posted_at is None
+
+
+@pytest.mark.anyio
+async def test_api_client_humanizes_company_slug_when_provider_omits_name():
+    parsed = parse_ats_url("https://jobs.lever.co/acme-corp-2024/12345678-1234-1234-1234-123456789012")
+    assert parsed is not None
+
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(200, json={"text": "Backend Engineer", "categories": {"location": "Remote"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as client:
+        job = await LeverClient().fetch(parsed, client)
+
+    assert job is not None
+    assert job.company == "Acme Corp 2024"
+    assert job.company != parsed.company_slug
+
+
+@pytest.mark.anyio
+async def test_nigerian_remote_state_comes_from_card_not_search_filter():
+    html = """
+    <article>
+      <h2><a href="/listings/backend-engineer">Backend Engineer</a></h2>
+      <p class="text-sm text-link-500">Example Ltd</p>
+      <span class="location">Lagos</span>
+      <span>Employment Type: Full time</span>
+      <span>Location Type: On-site</span>
+      <span>Department: Engineering</span>
+      <time datetime="2026-09-03">Sep 3, 2026</time>
+    </article>
+    """
+
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(200, text=html)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as client:
+        scraper = JobbermanScraper()
+        results = await scraper.search(client, SearchParams(job_title="Backend Engineer", remote=True))
+
+    assert len(results) == 1
+    assert results[0].is_remote is False
+    assert results[0].employment_type == "full_time"
+    assert results[0].work_model == "in_person"
+    assert results[0].department == "Engineering"
+    assert results[0].posted_at is not None

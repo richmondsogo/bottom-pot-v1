@@ -8,6 +8,7 @@ const extractionSummary = document.querySelector('#extractionSummary');
 const metrics = document.querySelector('#metrics');
 const emptyState = document.querySelector('#emptyState');
 const downloadButton = document.querySelector('#downloadBtn');
+const downloadJsonButton = document.querySelector('#downloadJsonBtn');
 const abortButton = document.querySelector('#cancelBtn');
 const tableSearch = document.querySelector('#tableSearch');
 const providerFilter = document.querySelector('#providerFilter');
@@ -18,8 +19,18 @@ const filterSummary = document.querySelector('#filterSummary');
 let activeRequest = null;
 let currentResults = [];
 
-/** Normalize provider fields and recover common metadata from snippet-only results. */
+/** Format backend-normalized fields; only snippet records receive a last-resort label parse. */
 function normalizeJob(job) {
+    if (job.data_source !== 'snippet') {
+        return {
+            ...job,
+            displayTitle: job.title || 'Untitled role',
+            displayLocation: job.location || 'Unknown',
+            displayEmployment: formatJobType(job.employment_type),
+            displayLocationType: formatWorkModel(job.work_model),
+            displayPostedDate: formatPostedDate(job.posted_at),
+        };
+    }
     const rawTitle = job.title || 'Untitled role';
     const labels = ['Location', 'Employment Type', 'Job Type', 'Location Type'];
     const labelPattern = new RegExp(`(?:${labels.join('|')})\\s*[.:]\\s*`, 'gi');
@@ -41,8 +52,22 @@ function normalizeJob(job) {
     const rawJobType = job.employment_type || details.employmentType || '';
     const jobTypeText = rawJobType.toLowerCase().replace(/[- ]/g, '_');
     const jobType = /intern/.test(jobTypeText) ? 'Internship' : /part/.test(jobTypeText) ? 'Part time' : /contract/.test(jobTypeText) ? 'Contract' : /full/.test(jobTypeText) ? 'Full time' : 'Unknown';
-    const postedDate = job.posted_at ? new Date(job.posted_at).toISOString().slice(0, 10) : 'Date unavailable';
+    const postedDate = formatPostedDate(job.posted_at);
     return { ...job, displayTitle: title || rawTitle, displayLocation: location, displayEmployment: jobType, displayLocationType: workModel, displayPostedDate: postedDate };
+}
+
+function formatJobType(value) {
+    return ({ full_time: 'Full time', part_time: 'Part time', internship: 'Internship', contract: 'Contract' })[value] || 'Unknown';
+}
+
+function formatWorkModel(value) {
+    return ({ remote: 'Remote', hybrid: 'Hybrid', in_person: 'In-person' })[value] || 'Unknown';
+}
+
+function formatPostedDate(value) {
+    if (!value) return 'Date unavailable';
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? 'Date unavailable' : date.toISOString().slice(0, 10);
 }
 
 function normalizedResults() {
@@ -82,6 +107,16 @@ function downloadCsv() {
     const link = document.createElement('a');
     link.href = url;
     link.download = `${document.querySelector('#keywords').value.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'bottom-pot'}-results.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+function downloadJson() {
+    const json = JSON.stringify(filteredResults().map(({ displayTitle, displayLocation, displayEmployment, displayLocationType, displayPostedDate, ...job }) => job), null, 2);
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${document.querySelector('#keywords').value.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'bottom-pot'}-results.json`;
     link.click();
     URL.revokeObjectURL(url);
 }
@@ -213,6 +248,7 @@ abortButton.addEventListener('click', resetView);
 document.querySelector('#resetBtn').addEventListener('click', resetView);
 document.querySelector('#errorResetBtn').addEventListener('click', resetView);
 downloadButton.addEventListener('click', downloadCsv);
+downloadJsonButton.addEventListener('click', downloadJson);
 [tableSearch, providerFilter, remoteFilter, employmentFilter].forEach((control) => control.addEventListener('input', renderResults));
 clearFiltersButton.addEventListener('click', () => {
     tableSearch.value = '';

@@ -2,7 +2,8 @@
 Tests for src/project_files/ats_url_parser.py
 
 Covers:
-- All 7 ATS platforms with valid URLs
+ All 7 ATS platforms with valid URLs
+ - URL variants (e.g., boards.greenhouse.io vs job-boards.greenhouse.io)
 - URL variants (e.g., boards.greenhouse.io vs job-boards.greenhouse.io)
 - Rejection of homepages, search pages, blog posts, partial paths
 - Edge cases: None, empty string, malformed URL
@@ -220,3 +221,33 @@ class TestEdgeCases:
         # Should return None, not raise
         result = parse_ats_url("not-a-url-at-all-:::###")
         assert result is None
+
+class TestAdditionalATS:
+    @pytest.mark.parametrize(
+        "url,ats",
+        [
+            ("https://jobs.jobvite.com/acme/job/abc123", "jobvite"),
+            ("https://acme.teamtailor.com/jobs/12345-backend-engineer", "teamtailor"),
+            ("https://jobs.personio.com/job/backend-engineer-12345", "personio"),
+            ("https://jobs.icims.com/jobs/12345/backend-engineer", "icims"),
+            ("https://apply.breezy.hr/p/abc123/backend-engineer", "breezy"),
+            ("https://applytojob.com/apply/abc123", "jazzhr"),
+            ("https://jobs.sap.com/job/12345/backend-engineer", "successfactors"),
+        ],
+    )
+    def test_supported_additional_job_urls(self, url, ats):
+        parsed = parse_ats_url(url)
+        assert parsed is not None
+        assert parsed.ats == ats
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://jobs.jobvite.com/acme",
+            "https://acme.teamtailor.com/jobs",
+            "https://jobs.icims.com/jobs/not-a-number/backend-engineer",
+            "https://apply.breezy.hr/p/abc123",
+        ],
+    )
+    def test_additional_homepages_and_malformed_urls_are_rejected(self, url):
+        assert parse_ats_url(url) is None
